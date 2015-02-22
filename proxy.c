@@ -126,6 +126,43 @@ static char *readFromClient(int sockfd) {
 	return request;
 }
 
+static char *readFromServer (int iClientfd, int iServerfd) {
+	enum {BUF_SIZE = 4096};
+
+	int iRecv, iSize;
+	int iReqSize = 0;
+	char buf[BUF_SIZE + 1];
+	char *response;
+
+	response = (char *) malloc(BUF_SIZE + 1);
+	if (response == NULL) {
+		fprintf(stderr, "Memory allocation error\n");
+		close(iClientfd);
+		close(iServerfd);
+		exit(EXIT_FAILURE);
+	}
+	iSize = BUF_SIZE;
+	response[0] = '\0';
+
+	while ((iRecv = recv(iServerfd, buf, BUF_SIZE, 0)) > 0) {
+		buf[iRecv] = '\0';
+		iReqSize += iRecv;
+		if (iReqSize > iSize) {
+			iSize *= 2;
+			response = (char *) realloc(iSize + 1);
+			if (response == NULL) {
+				fprintf(stderr, "Memory allocation error\n");
+				close(iClientfd);
+				close(iServerfd);
+				exit(EXIT_FAILURE);
+			}
+		}
+		strcat(response, buf);
+	}
+
+	return response;
+}
+
 static char *clientToServer (struct ParsedRequest *req, char *clientReq, int iClientfd, int iServerfd) {
 	int iHeadersLen;
 	char *serverReq;
@@ -170,17 +207,17 @@ static char *clientToServer (struct ParsedRequest *req, char *clientReq, int iCl
 	return serverReq;
 }
 
-static void writeToServer (char *serverReq, int iClientfd, int iServerfd) {
+static void writeToSocket (char *message, int sockfd, int otherfd) {
 	int iSent;
 	int iTotalSent = 0;
-	int numBytes = strlen(serverReq);
-	char *cpMarker = serverReq;
+	int numBytes = strlen(message);
+	char *cpMarker = message;
 
 	while (*cpMarker) {
-		if ((iSent = send(iServerfd, (void *) cpMarker, numBytes - iTotalSent, NULL)) < 0) {
+		if ((iSent = send(sockfd, (void *) cpMarker, numBytes - iTotalSent, NULL)) < 0) {
 			perror("SEND error");
-			close(iClientfd);
-			close(iServerfd);
+			close(sockfd);
+			close(otherfd);
 			exit(EXIT_FAILURE);
 		}
 		cpMarker += iSent;
@@ -188,57 +225,11 @@ static void writeToServer (char *serverReq, int iClientfd, int iServerfd) {
 	}
 }
 
-static char *readFromServer (int iClientfd, int iServerfd) {
-	enum {BUF_SIZE = 4096};
-
-	int iRecv, iSize;
-	int iReqSize = 0;
-	char buf[BUF_SIZE + 1];
-	char *response;
-
-	response = (char *) malloc(BUF_SIZE + 1);
-	if (response == NULL) {
-		fprintf(stderr, "Memory allocation error\n");
-		close(iClientfd);
-		close(iServerfd);
-		exit(EXIT_FAILURE);
-	}
-	iSize = BUF_SIZE;
-	response[0] = '\0';
-
-	while ((iRecv = recv(iServerfd, buf, BUF_SIZE, 0)) > 0) {
-		buf[iRecv] = '\0';
-		iReqSize += iRecv;
-		if (iReqSize > iSize) {
-			iSize *= 2;
-			response = (char *) realloc(iSize + 1);
-			if (response == NULL) {
-				fprintf(stderr, "Memory allocation error\n");
-				close(iClientfd);
-				close(iServerfd);
-				exit(EXIT_FAILURE);
-			}
-		}
-		strcat(response, buf);
-	}
-
-	return response;
-}
-
-static void writeToClient ()
-
 static void handleRequest (int sockfd) {
-
-
-	int iPid, iServerfd, iHeadersLen, iRequestLen;
-	size_t addrLen;
+	int iPid, iServerfd;
 	char *clientReq;
 	char *serverReq;
 	char *serverResp;
-	char *clientResp;
-	char *reqBuf;
-	char *respBuf;
-	struct sockaddr_in serverAddr, clientAddr;
 
 	fflush(NULL);
 	iPid = fork();
@@ -258,7 +249,6 @@ static void handleRequest (int sockfd) {
 		req = ParsedRequest_create();
 		if (ParsedRequest_parse(req, clientReq, strlen(clientReq)) < 0) {
 			fprintf(stderr, "Failed to parse request\n");
-			ParsedRequest_destroy(req);
 			close(sockfd);
 			exit(EXIT_FAILURE);
 		}
@@ -266,13 +256,10 @@ static void handleRequest (int sockfd) {
 
 		iServerfd = createClientSocket(req->host, req->port);
 		serverReq = clientToServer(req, clientReq, sockfd, iServerfd);
-		writeToServer(serverReq, sockfd, iServerfd);
+		writeToSocket(serverReq, iServerfd, sockfd);
 
 		serverResp = readFromServer(iServerfd, sockfd);
-		writeToClient(serverResp, sockfd, iServerfd);
-
-
-		send(sockfd, /*somebuf*/, ...);
+		writeToSocket(serverResp, sockfd, iServerfd);
 
 		ParsedRequest_destroy(req);
 		free(serverReq);
@@ -285,14 +272,15 @@ static void handleRequest (int sockfd) {
 	}
 
 	/* This code is executed by only the parent process. */
+	numChild++;
 
-	/* Wait for the child process to finish. */
 	while (waitpid(-1, NULL, WNOHANG) > 0)
 		numChild--;
 	if (numChild >= MAX_NUM_CHILD) {
 		wait(NULL);
 		numChild--;
 	}
+
 	close(sockfd);
 }
 
@@ -322,20 +310,9 @@ int main(int argc, char * argv[]) {
 	    }
 	    handleRequest(iClientfd);
 	  }
-	  /*
-	   * upon receiving connection, use fork()
-	   */
-
-	  /*
-	   * when waiting on a child process, is proxy still listening for more connections? Should we be waiting?
-	   */
-
 
 	  /* Clean up */
 	  close(iSockfd);
 
-
-
-
-	return 0;
+	  return 0;
 }
