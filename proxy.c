@@ -112,7 +112,7 @@ static char *readFromClient(int sockfd) {
 		iReqSize += iRecv;
 		if (iReqSize > iSize) {
 			iSize *= 2;
-			request = (char *) realloc(iSize + 1);
+			request = (char *) realloc(request, iSize + 1);
 			if (request == NULL) {
 				fprintf(stderr, "Memory allocation error\n");
 				close(sockfd);
@@ -149,7 +149,7 @@ static char *readFromServer (int iClientfd, int iServerfd) {
 		iReqSize += iRecv;
 		if (iReqSize > iSize) {
 			iSize *= 2;
-			response = (char *) realloc(iSize + 1);
+			response = (char *) realloc(response, iSize + 1);
 			if (response == NULL) {
 				fprintf(stderr, "Memory allocation error\n");
 				close(iClientfd);
@@ -214,7 +214,7 @@ static void writeToSocket (char *message, int sockfd, int otherfd) {
 	char *cpMarker = message;
 
 	while (*cpMarker) {
-		if ((iSent = send(sockfd, (void *) cpMarker, numBytes - iTotalSent, NULL)) < 0) {
+		if ((iSent = send(sockfd, (void *) cpMarker, numBytes - iTotalSent, 0)) < 0) {
 			perror("SEND error");
 			close(sockfd);
 			close(otherfd);
