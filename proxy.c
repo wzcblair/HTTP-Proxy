@@ -14,7 +14,10 @@
 #include <netinet/in.h>
 #include <netdb.h>
 
+enum {MAX_NUM_CHILD = 20};
+
 const char *pcPgmName;
+static int numChild;
 
 /* Create, bind, and listen on a stream socket on port pcPort and return socket */
 static int createServerSocket(char *pcPort) {
@@ -82,13 +85,157 @@ static int createClientSocket(char *pcAddress, char *pcPort) {
   return iSockfd;
 }
 
-static void handleRequest (int sockfd) {
+static char *readFromClient(int sockfd) {
 	enum {BUF_SIZE = 4096};
 
-	int iRecv, iPid, iServerfd, iHeadersLen, iRequestLen;
-	size_t addrLen;
-	char buf[BUF_SIZE];
+	int iRecv, iSize;
+	int iReqSize = 0;
+	char buf[BUF_SIZE + 1];
+	char *request;
+
+	request = (char *) malloc(BUF_SIZE + 1);
+	if (request == NULL) {
+		fprintf(stderr, "Memory allocation error\n");
+		close(sockfd);
+		exit(EXIT_FAILURE);
+	}
+	iSize = BUF_SIZE;
+	request[0] = '\0';
+
+	while (1) {
+		if ((iRecv = recv(sockfd, buf, BUF_SIZE, 0)) < 0) {
+			perror(pcPgmName);
+			close(sockfd);
+			exit(EXIT_FAILURE);
+		}
+		buf[iRecv] = '\0';
+		iReqSize += iRecv;
+		if (iReqSize > iSize) {
+			iSize *= 2;
+			request = (char *) realloc(iSize + 1);
+			if (request == NULL) {
+				fprintf(stderr, "Memory allocation error\n");
+				close(sockfd);
+				exit(EXIT_FAILURE);
+			}
+		}
+		strcat(request, buf);
+		if (strstr(request, "\r\n\r\n") != NULL)
+			break;
+	}
+	return request;
+}
+
+static char *clientToServer (struct ParsedRequest *req, char *clientReq, int iClientfd, int iServerfd) {
+	int iHeadersLen;
+	char *serverReq;
 	char *headersBuf;
+
+	ParsedHeader_set(req, "Host", req->host);
+	ParsedHeader_set(req, "Connection", "close");
+
+	iHeadersLen = ParsedHeader_headersLen(req);
+	headersBuf = (char *) malloc(iHeadersLen + 1);
+	if (headersBuf == NULL) {
+		fprintf(stderr, "Memory allocation error\n");
+		close(iClientfd);
+		close(iServerfd);
+		exit(EXIT_FAILURE);
+	}
+
+	ParsedRequest_unparse_headers(req, headersBuf, iHeadersLen);
+	headersBuf[iHeadersLen] = '\0';
+
+	serverReq = (char *) malloc(strlen(req->method) + strlen(req->path)
+								+ strlen(req->version) + iHeadersLen + 5);
+	if (serverReq == NULL) {
+		fprintf(stderr, "Memory allocation error\n");
+		close(iClientfd);
+		close(iServerfd);
+		exit(EXIT_FAILURE);
+	}
+
+	serverReq[0] = '\0';
+	strcpy(serverReq, req->method);
+	strcat(serverReq, " ");
+	strcat(serverReq, req->path);
+	strcat(serverReq, " ");
+	strcat(serverReq, req->version);
+	strcat(serverReq, "\r\n");
+	strcat(serverReq, headersBuf);
+
+	free(headersBuf);
+	ParsedRequest_destroy(req);
+
+	return serverReq;
+}
+
+static void writeToServer (char *serverReq, int iClientfd, int iServerfd) {
+	int iSent;
+	int iTotalSent = 0;
+	int numBytes = strlen(serverReq);
+	char *cpMarker = serverReq;
+
+	while (*cpMarker) {
+		if ((iSent = send(iServerfd, (void *) cpMarker, numBytes - iTotalSent, NULL)) < 0) {
+			perror("SEND error");
+			close(iClientfd);
+			close(iServerfd);
+			exit(EXIT_FAILURE);
+		}
+		cpMarker += iSent;
+		iTotalSent += iSent;
+	}
+}
+
+static char *readFromServer (int iClientfd, int iServerfd) {
+	enum {BUF_SIZE = 4096};
+
+	int iRecv, iSize;
+	int iReqSize = 0;
+	char buf[BUF_SIZE + 1];
+	char *response;
+
+	response = (char *) malloc(BUF_SIZE + 1);
+	if (response == NULL) {
+		fprintf(stderr, "Memory allocation error\n");
+		close(iClientfd);
+		close(iServerfd);
+		exit(EXIT_FAILURE);
+	}
+	iSize = BUF_SIZE;
+	response[0] = '\0';
+
+	while ((iRecv = recv(iServerfd, buf, BUF_SIZE, 0)) > 0) {
+		buf[iRecv] = '\0';
+		iReqSize += iRecv;
+		if (iReqSize > iSize) {
+			iSize *= 2;
+			response = (char *) realloc(iSize + 1);
+			if (response == NULL) {
+				fprintf(stderr, "Memory allocation error\n");
+				close(iClientfd);
+				close(iServerfd);
+				exit(EXIT_FAILURE);
+			}
+		}
+		strcat(response, buf);
+	}
+
+	return response;
+}
+
+static void writeToClient ()
+
+static void handleRequest (int sockfd) {
+
+
+	int iPid, iServerfd, iHeadersLen, iRequestLen;
+	size_t addrLen;
+	char *clientReq;
+	char *serverReq;
+	char *serverResp;
+	char *clientResp;
 	char *reqBuf;
 	char *respBuf;
 	struct sockaddr_in serverAddr, clientAddr;
@@ -105,76 +252,32 @@ static void handleRequest (int sockfd) {
 	{
 		/* This code is executed by only the child process. */
 		struct ParsedRequest *req;
-		if ((iRecv = recv(sockfd, buf, BUF_SIZE, 0)) < 0) {
-			perror(pcPgmName);
-			close(sockfd);
-			exit(EXIT_FAILURE);
-		}
+
+		clientReq = readFromClient(sockfd);
 
 		req = ParsedRequest_create();
-		if (ParsedRequest_parse(req, buf, iRecv) < 0) {
+		if (ParsedRequest_parse(req, clientReq, strlen(clientReq)) < 0) {
 			fprintf(stderr, "Failed to parse request\n");
 			ParsedRequest_destroy(req);
 			close(sockfd);
 			exit(EXIT_FAILURE);
 		}
 		if (req->port == NULL) req->port = "80";
+
 		iServerfd = createClientSocket(req->host, req->port);
-		ParsedHeader_set(req, "Connection", "close");
+		serverReq = clientToServer(req, clientReq, sockfd, iServerfd);
+		writeToServer(serverReq, sockfd, iServerfd);
 
-		iHeadersLen = ParsedHeader_headersLen(req);
-		headersBuf = (char *) malloc(iHeadersLen + 1);
-		if (headersBuf == NULL) {
-			fprintf(stderr, "Memory allocation error\n");
-			ParsedRequest_destroy(req);
-			close(sockfd);
-			close(iServerfd);
-			exit(EXIT_FAILURE);
-		}
+		serverResp = readFromServer(iServerfd, sockfd);
+		writeToClient(serverResp, sockfd, iServerfd);
 
-		ParsedRequest_unparse_headers(req, headersBuf, iHeadersLen);
-		headersBuf[iHeadersLen] = '\0';
-
-		reqBuf = (char *) calloc(strlen(req->method) + strlen(req->path)
-								+ strlen(req->version) + strlen(req->host) + strlen(req->port)
-								+ iHeadersLen + 14, sizeof(char));
-		if (reqBuf == NULL) {
-			fprintf(stderr, "Memory allocation error\n");
-			ParsedRequest_destroy(req);
-			free(headersBuf);
-			close(sockfd);
-			close(iServerfd);
-			exit(EXIT_FAILURE);
-		}
-		strcpy(reqBuf, req->method);
-		strcat(reqBuf, " ");
-		strcat(reqBuf, req->path);
-		strcat(reqBuf, " ");
-		strcat(reqBuf, req->version);
-		strcat(reqBuf, "\r\n");
-		strcat(reqBuf, "Host: ");
-		strcat(reqBuf, req->host);
-		strcat(reqBuf, ":");
-		strcat(reqBuf, req->port);
-		strcat(reqBuf, "\r\n");
-		strcat(reqBuf, headersBuf);
-
-		if (send(iServerfd, (void *) reqBuf, strlen(reqBuf), NULL) < 0) {
-			perror("SEND error");
-			ParsedRequest_destroy(req);
-			free(headersBuf);
-			free(reqBuf);
-			close(sockfd);
-			close(iServerfd);
-			exit(EXIT_FAILURE);
-		}
-
-		recv(iServerfd, /*somebuf*/, ...);
 
 		send(sockfd, /*somebuf*/, ...);
+
 		ParsedRequest_destroy(req);
-		free(headersBuf);
-		free(reqBuf);
+		free(serverReq);
+		free(clientReq);
+		free(serverResp);
 		close(sockfd);
 		close(iServerfd);
 
@@ -184,8 +287,12 @@ static void handleRequest (int sockfd) {
 	/* This code is executed by only the parent process. */
 
 	/* Wait for the child process to finish. */
-	iPid = wait(NULL);
-
+	while (waitpid(-1, NULL, WNOHANG) > 0)
+		numChild--;
+	if (numChild >= MAX_NUM_CHILD) {
+		wait(NULL);
+		numChild--;
+	}
 	close(sockfd);
 }
 
@@ -202,6 +309,7 @@ int main(int argc, char * argv[]) {
 	  /* Prepare to process requests */
 	  pcPgmName = argv[0];
 	  iSockfd = createServerSocket(argv[1]);
+	  numChild = 0;
 	  iLen = sizeof(struct sockaddr);
 
 	  /* Handle clients, one at a time */
