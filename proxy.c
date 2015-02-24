@@ -257,7 +257,7 @@ static void handleRequest (int sockfd) {
 		serverReq = clientToServer(req, clientReq, sockfd, iServerfd);
 		writeToSocket(serverReq, iServerfd, sockfd);
 
-		serverResp = readFromServer(iServerfd, sockfd);
+		serverResp = readFromServer(sockfd, iServerfd);
 		writeToSocket(serverResp, sockfd, iServerfd);
 
 		ParsedRequest_destroy(req);
