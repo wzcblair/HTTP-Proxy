@@ -202,7 +202,6 @@ static char *clientToServer (struct ParsedRequest *req, char *clientReq, int iCl
 	strcat(serverReq, headersBuf);
 
 	free(headersBuf);
-	ParsedRequest_destroy(req);
 
 	return serverReq;
 }
