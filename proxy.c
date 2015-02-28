@@ -11,6 +11,8 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <netinet/in.h>
 #include <netdb.h>
 
@@ -31,7 +33,7 @@ static int createServerSocket(char *pcPort) {
   aHints.ai_family = AF_UNSPEC;
   aHints.ai_socktype = SOCK_STREAM;
   aHints.ai_flags = AI_PASSIVE;
-  if (getaddrinfo(NULL, pcPort, &aHints, &paRes) != 0) {
+  if (getaddrinfo(NULL, pcPort, &aHints, &paRes) < 0) {
       perror("GETADDR error");
       exit(EXIT_FAILURE);
   }
@@ -242,7 +244,7 @@ static void handleRequest (int sockfd) {
 	{
 		/* This code is executed by only the child process. */
 		struct ParsedRequest *req;
-		const char *errMessage = "HTTP/1.0 500 INTERNAL ERROR\r\n\r\n";
+		char *errMessage = (char *) "HTTP/1.0 500 INTERNAL ERROR\r\n\r\n";
 
 		clientReq = readFromClient(sockfd);
 
@@ -252,7 +254,7 @@ static void handleRequest (int sockfd) {
 			close(sockfd);
 			exit(EXIT_FAILURE);
 		}
-		if (req->port == NULL) req->port = "80";
+		if (req->port == NULL) req->port = (char *) "80";
 
 		iServerfd = createClientSocket(req->host, req->port);
 		serverReq = clientToServer(req, clientReq, sockfd, iServerfd);
@@ -285,7 +287,8 @@ static void handleRequest (int sockfd) {
 }
 
 int main(int argc, char * argv[]) {
-	int iSockfd, iClientfd, iLen;
+	int iSockfd, iClientfd;
+	socklen_t iLen;
 	struct sockaddr aClient;
 
 	  /* Single argument of argv[1] is the port number */
