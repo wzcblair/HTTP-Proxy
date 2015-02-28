@@ -216,7 +216,7 @@ static void writeToSocket (char *message, int sockfd, int otherfd) {
 		if ((iSent = send(sockfd, (void *) cpMarker, numBytes - iTotalSent, 0)) < 0) {
 			perror("SEND error");
 			close(sockfd);
-			close(otherfd);
+			if (otherfd != -1) close(otherfd);
 			exit(EXIT_FAILURE);
 		}
 		cpMarker += iSent;
@@ -242,12 +242,13 @@ static void handleRequest (int sockfd) {
 	{
 		/* This code is executed by only the child process. */
 		struct ParsedRequest *req;
+		const char *errMessage = "HTTP/1.0 500 INTERNAL ERROR\r\n\r\n";
 
 		clientReq = readFromClient(sockfd);
 
 		req = ParsedRequest_create();
 		if (ParsedRequest_parse(req, clientReq, strlen(clientReq)) < 0) {
-			fprintf(stderr, "Failed to parse request\n");
+			writeToSocket(errMessage, sockfd, -1);
 			close(sockfd);
 			exit(EXIT_FAILURE);
 		}
