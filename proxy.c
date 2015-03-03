@@ -23,7 +23,7 @@ static int numChild;
 
 /* Create, bind, and listen on a stream socket on port pcPort and return socket */
 static int createServerSocket(char *pcPort) {
-	enum {BACKLOG = 5};
+	enum {BACKLOG = 20};
 
   struct addrinfo aHints, *paRes;
   int iSockfd;
@@ -104,7 +104,7 @@ static char *readFromClient(int sockfd) {
 	iSize = BUF_SIZE;
 	request[0] = '\0';
 
-	while (1) {
+	while (strstr(request, "\r\n\r\n") == NULL) {
 		if ((iRecv = recv(sockfd, buf, BUF_SIZE, 0)) < 0) {
 			perror(pcPgmName);
 			close(sockfd);
@@ -122,8 +122,6 @@ static char *readFromClient(int sockfd) {
 			}
 		}
 		strcat(request, buf);
-		if (strstr(request, "\r\n\r\n") != NULL)
-			break;
 	}
 	return request;
 }
@@ -169,6 +167,18 @@ static char *clientToServer (struct ParsedRequest *req, char *clientReq, int iCl
 	int iHeadersLen;
 	char *serverReq;
 	char *headersBuf;
+	/*char *host = (char *) malloc(strlen(req->host) + strlen(req->port) + 2);
+	if (host == NULL) {
+		fprintf(stderr, "Memory allocation error\n");
+		close(iClientfd);
+		close(iServerfd);
+		exit(EXIT_FAILURE);
+	}
+	
+	host[0] = '\0';
+	strcpy(host, req->host);
+	strcat(host, ":");
+	strcat(host, req->port); */
 
 	ParsedHeader_set(req, "Host", req->host);
 	ParsedHeader_set(req, "Connection", "close");
@@ -203,6 +213,7 @@ static char *clientToServer (struct ParsedRequest *req, char *clientReq, int iCl
 	strcat(serverReq, "\r\n");
 	strcat(serverReq, headersBuf);
 
+	/*free(host); */
 	free(headersBuf);
 
 	return serverReq;
@@ -303,7 +314,7 @@ int main(int argc, char * argv[]) {
 	  numChild = 0;
 	  iLen = sizeof(struct sockaddr);
 
-	  /* Handle clients, one at a time */
+	  /* Handle clients */
 	  while (1) {
 	    /* Accept the client, skipping on failure */
 	    if ((iClientfd = accept(iSockfd, &aClient, &iLen)) <=  0) {
