@@ -16,6 +16,9 @@
 #include <netinet/in.h>
 #include <netdb.h>
 
+// don't use string for readFromServer and writeToSocket, use raw bytes. Use int pointer to store size.
+// shutdown before close
+
 enum {MAX_NUM_CHILD = 20};
 
 const char *pcPgmName;
@@ -98,6 +101,7 @@ static char *readFromClient(int sockfd) {
 	request = (char *) malloc(BUF_SIZE + 1);
 	if (request == NULL) {
 		fprintf(stderr, "Memory allocation error\n");
+		shutdown(sockfd, SHUT_RD);
 		close(sockfd);
 		exit(EXIT_FAILURE);
 	}
@@ -107,6 +111,7 @@ static char *readFromClient(int sockfd) {
 	while (strstr(request, "\r\n\r\n") == NULL) {
 		if ((iRecv = recv(sockfd, buf, BUF_SIZE, 0)) < 0) {
 			perror(pcPgmName);
+			shutdown(sockfd, SHUT_RD);
 			close(sockfd);
 			exit(EXIT_FAILURE);
 		}
@@ -117,12 +122,14 @@ static char *readFromClient(int sockfd) {
 			request = (char *) realloc(request, iSize + 1);
 			if (request == NULL) {
 				fprintf(stderr, "Memory allocation error\n");
+				shutdown(sockfd, SHUT_RD);
 				close(sockfd);
 				exit(EXIT_FAILURE);
 			}
 		}
 		strcat(request, buf);
 	}
+	printf(request);
 	return request;
 }
 
