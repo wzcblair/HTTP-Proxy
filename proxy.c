@@ -126,7 +126,7 @@ static char *readFromClient(int sockfd) {
 	}
 	iSize = BUF_SIZE;
 	request[0] = '\0';
-
+	
 	while (strstr(request, "\r\n\r\n") == NULL) {
 		if ((iRecv = recv(sockfd, buf, BUF_SIZE, 0)) < 0) {
 			writeToSocket(errMessage, sockfd, -1, &errMessageLen);
@@ -134,9 +134,11 @@ static char *readFromClient(int sockfd) {
 			close(sockfd);
 			exit(EXIT_FAILURE);
 		}
+		if (iRecv == 0) break;
 		buf[iRecv] = '\0';
 		iReqSize += iRecv;
 		if (iReqSize > iSize) {
+
 			iSize *= 2;
 			request = (char *) realloc(request, iSize + 1);
 			if (request == NULL) {
@@ -147,6 +149,7 @@ static char *readFromClient(int sockfd) {
 			}
 		}
 		strcat(request, buf);
+	
 	}
 	return request;
 }
@@ -168,7 +171,7 @@ static char *readFromServer (int iClientfd, int iServerfd, int *reqSize) {
 		exit(EXIT_FAILURE);
 	}
 
-	while ((iRecv = recv(iServerfd, response + iReqSize, iSize - iReqSize, 0)) > 0) {
+	/*while ((iRecv = recv(iServerfd, response + iReqSize, iSize - iReqSize, 0)) > 0) {
 		iReqSize += iRecv;
 		if (iReqSize >= iSize) {
 			iSize *= 2;
@@ -182,7 +185,20 @@ static char *readFromServer (int iClientfd, int iServerfd, int *reqSize) {
 				exit(EXIT_FAILURE);
 			}
 		}
+		printf("%d\n", iSize - iReqSize);
+		}*/
+	while ((iRecv = recv(iServerfd, response, iSize, 0)) > 0) {
+	      writeToSocket(response, iClientfd, iServerfd, &iRecv);
+	}	
+	if (iRecv < 0) {
+	  writeToSocket(errMessage, iClientfd, iServerfd, &errMessageLen);
+	  shutdown(iClientfd, SHUT_RDWR);
+	  shutdown(iServerfd, SHUT_RDWR);
+	  close(iClientfd);
+	  close(iServerfd);
+	  exit(EXIT_FAILURE);
 	}
+
 
 	*reqSize = iReqSize;
 	return response;
@@ -245,7 +261,7 @@ static char *clientToServer (struct ParsedRequest *req, char *clientReq,
 	return serverReq;
 }
 
-static void handleRequest (int sockfd) {
+static void handleRequest (int sockfd, int iSockfd) {
 	int iPid, iServerfd;
 	char *clientReq;
 	char *serverReq;
@@ -268,9 +284,9 @@ static void handleRequest (int sockfd) {
 		int iRespLen = 0;
 		int *reqLen = &iReqLen;
 		int *respLen = &iRespLen;
-
+	
 		clientReq = readFromClient(sockfd);
-
+	
 		req = ParsedRequest_create();
 		if (ParsedRequest_parse(req, clientReq, strlen(clientReq)) < 0) {
 			writeToSocket(errMessage, sockfd, -1, &errMessageLen);
@@ -285,8 +301,8 @@ static void handleRequest (int sockfd) {
 		writeToSocket(serverReq, iServerfd, sockfd, reqLen);
 
 		serverResp = readFromServer(sockfd, iServerfd, respLen);
-		writeToSocket(serverResp, sockfd, iServerfd, respLen);
-
+		/*writeToSocket(serverResp, sockfd, iServerfd, respLen);*/
+		
 		ParsedRequest_destroy(req);
 		free(serverReq);
 		free(clientReq);
@@ -295,6 +311,7 @@ static void handleRequest (int sockfd) {
 		shutdown(iServerfd, SHUT_RDWR);
 		close(sockfd);
 		close(iServerfd);
+		close(iSockfd);
 
 		exit(EXIT_SUCCESS);
 	}
@@ -302,12 +319,14 @@ static void handleRequest (int sockfd) {
 	/* This code is executed by only the parent process. */
 	numChild++;
 
-	while (waitpid(-1, NULL, WNOHANG) > 0)
+	while (waitpid(-1, NULL, WNOHANG) > 0) {
 		numChild--;
+	}
 	if (numChild >= MAX_NUM_CHILD) {
 		wait(NULL);
 		numChild--;
 	}
+	
 
 	close(sockfd);
 }
@@ -338,7 +357,7 @@ int main(int argc, char * argv[]) {
 	      close(iClientfd);
 	      continue;
 	    }
-	    handleRequest(iClientfd);
+	    handleRequest(iClientfd, iSockfd);
 	  }
 
 	  /* Clean up */
