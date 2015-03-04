@@ -16,20 +16,17 @@
 #include <netinet/in.h>
 #include <netdb.h>
 
-// don't use string for readFromServer and writeToSocket, use raw bytes. Use int pointer to store size.
-// shutdown before close
-
-enum {MAX_NUM_CHILD = 20, ERR_MESSAGE_LEN = 31};
+enum {MAX_NUM_CHILD = 20};
 
 static int numChild;
-/*static int errMessageLen = 31;*/
+static int errMessageLen = 31;
 const char *pcPgmName;
 const char *errMessage = "HTTP/1.0 500 INTERNAL ERROR\r\n\r\n";
 
 
 /* Create, bind, and listen on a stream socket on port pcPort and return socket */
 static int createServerSocket(char *pcPort) {
-	enum {BACKLOG = 20};
+	enum {BACKLOG = 50};
 
   struct addrinfo aHints, *paRes;
   int iSockfd;
@@ -93,6 +90,25 @@ static int createClientSocket(char *pcAddress, char *pcPort) {
   return iSockfd;
 }
 
+static void writeToSocket (const char *message, int sockfd, int otherfd, int *size) {
+	int iSent;
+	int iTotalSent = 0;
+
+	while (iTotalSent < *size) {
+		if ((iSent = send(sockfd, (void *) (message + iTotalSent), *size - iTotalSent, 0)) < 0) {
+			perror("SEND error");
+			shutdown(sockfd, SHUT_RDWR);
+			close(sockfd);
+			if (otherfd != -1) {
+				shutdown(otherfd, SHUT_RDWR);
+				close(otherfd);
+			}
+			exit(EXIT_FAILURE);
+		}
+		iTotalSent += iSent;
+	}
+}
+
 static char *readFromClient(int sockfd) {
 	enum {BUF_SIZE = 4096};
 
@@ -103,7 +119,7 @@ static char *readFromClient(int sockfd) {
 
 	request = (char *) malloc(BUF_SIZE + 1);
 	if (request == NULL) {
-		writeToSocket(errMessage, sockfd, -1, &ERR_MESSAGE_LEN);
+		writeToSocket(errMessage, sockfd, -1, &errMessageLen);
 		shutdown(sockfd, SHUT_RDWR);
 		close(sockfd);
 		exit(EXIT_FAILURE);
@@ -113,7 +129,7 @@ static char *readFromClient(int sockfd) {
 
 	while (strstr(request, "\r\n\r\n") == NULL) {
 		if ((iRecv = recv(sockfd, buf, BUF_SIZE, 0)) < 0) {
-			writeToSocket(errMessage, sockfd, -1, &ERR_MESSAGE_LEN);
+			writeToSocket(errMessage, sockfd, -1, &errMessageLen);
 			shutdown(sockfd, SHUT_RDWR);
 			close(sockfd);
 			exit(EXIT_FAILURE);
@@ -124,7 +140,7 @@ static char *readFromClient(int sockfd) {
 			iSize *= 2;
 			request = (char *) realloc(request, iSize + 1);
 			if (request == NULL) {
-				writeToSocket(errMessage, sockfd, -1, &ERR_MESSAGE_LEN);
+				writeToSocket(errMessage, sockfd, -1, &errMessageLen);
 				shutdown(sockfd, SHUT_RDWR);
 				close(sockfd);
 				exit(EXIT_FAILURE);
@@ -144,7 +160,7 @@ static char *readFromServer (int iClientfd, int iServerfd, int *reqSize) {
 
 	response = (char *) malloc(iSize);
 	if (response == NULL) {
-		writeToSocket(errMessage, iClientfd, iServerfd, &ERR_MESSAGE_LEN);
+		writeToSocket(errMessage, iClientfd, iServerfd, &errMessageLen);
 		shutdown(iClientfd, SHUT_RDWR);
 		shutdown(iServerfd, SHUT_RDWR);
 		close(iClientfd);
@@ -158,7 +174,7 @@ static char *readFromServer (int iClientfd, int iServerfd, int *reqSize) {
 			iSize *= 2;
 			response = (char *) realloc(response, iSize);
 			if (response == NULL) {
-				writeToSocket(errMessage, iClientfd, iServerfd, &ERR_MESSAGE_LEN);
+				writeToSocket(errMessage, iClientfd, iServerfd, &errMessageLen);
 				shutdown(iClientfd, SHUT_RDWR);
 				shutdown(iServerfd, SHUT_RDWR);
 				close(iClientfd);
@@ -196,7 +212,7 @@ static char *clientToServer (struct ParsedRequest *req, char *clientReq,
 	iHeadersLen = ParsedHeader_headersLen(req);
 	headersBuf = (char *) malloc(iHeadersLen + 1);
 	if (headersBuf == NULL) {
-		writeToSocket(errMessage, iClientfd, -1, &ERR_MESSAGE_LEN);
+		writeToSocket(errMessage, iClientfd, -1, &errMessageLen);
 		shutdown(iClientfd, SHUT_RDWR);
 		close(iClientfd);
 		exit(EXIT_FAILURE);
@@ -208,7 +224,7 @@ static char *clientToServer (struct ParsedRequest *req, char *clientReq,
 	*reqLen = strlen(req->method) + strlen(req->path) + strlen(req->version) + iHeadersLen + 4;
 	serverReq = (char *) malloc(*reqLen + 1);
 	if (serverReq == NULL) {
-		writeToSocket(errMessage, iClientfd, -1, &ERR_MESSAGE_LEN);
+		writeToSocket(errMessage, iClientfd, -1, &errMessageLen);
 		shutdown(iClientfd, SHUT_RDWR);
 		close(iClientfd);
 		exit(EXIT_FAILURE);
@@ -227,25 +243,6 @@ static char *clientToServer (struct ParsedRequest *req, char *clientReq,
 	free(headersBuf);
 
 	return serverReq;
-}
-
-static void writeToSocket (const char *message, int sockfd, int otherfd, int *size) {
-	int iSent;
-	int iTotalSent = 0;
-
-	while (iTotalSent < *size) {
-		if ((iSent = send(sockfd, (void *) (message + iTotalSent), *size - iTotalSent, 0)) < 0) {
-			perror("SEND error");
-			shutdown(sockfd, SHUT_RDWR);
-			close(sockfd);
-			if (otherfd != -1) {
-				shutdown(otherfd, SHUT_RDWR);
-				close(otherfd);
-			}
-			exit(EXIT_FAILURE);
-		}
-		iTotalSent += iSent;
-	}
 }
 
 static void handleRequest (int sockfd) {
@@ -267,14 +264,16 @@ static void handleRequest (int sockfd) {
 	{
 		/* This code is executed by only the child process. */
 		struct ParsedRequest *req;
-		int *reqLen;
-		int *respLen;
+		int iReqLen = 0;
+		int iRespLen = 0;
+		int *reqLen = &iReqLen;
+		int *respLen = &iRespLen;
 
 		clientReq = readFromClient(sockfd);
 
 		req = ParsedRequest_create();
 		if (ParsedRequest_parse(req, clientReq, strlen(clientReq)) < 0) {
-			writeToSocket(errMessage, sockfd, -1, &ERR_MESSAGE_LEN);
+			writeToSocket(errMessage, sockfd, -1, &errMessageLen);
 			shutdown(sockfd, SHUT_RDWR);
 			close(sockfd);
 			exit(EXIT_FAILURE);
@@ -292,6 +291,8 @@ static void handleRequest (int sockfd) {
 		free(serverReq);
 		free(clientReq);
 		free(serverResp);
+		shutdown(sockfd, SHUT_RDWR);
+		shutdown(iServerfd, SHUT_RDWR);
 		close(sockfd);
 		close(iServerfd);
 
@@ -308,7 +309,6 @@ static void handleRequest (int sockfd) {
 		numChild--;
 	}
 
-	shutdown(sockfd, SHUT_RDWR);
 	close(sockfd);
 }
 
